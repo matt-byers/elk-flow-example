@@ -205,8 +205,11 @@ async function layoutWithElk(nodes: Node[], edges: Edge[]): Promise<Node[]> {
   // Constrain child nodes to be within reasonable vertical distance from their parent
   const constrainedNodes = constrainChildrenToParent(alignedNodes, edges);
   
-  // Fix any actual node overlaps
-  const nonOverlappingNodes = fixActualOverlaps(constrainedNodes);
+  // Center parent nodes over their children and propagate positioning
+  const centeredNodes = centerParentsOverChildren(constrainedNodes, edges);
+  
+  // Fix any remaining overlaps after centering
+  const nonOverlappingNodes = fixActualOverlaps(centeredNodes);
 
   // Calculate bounds of all regular nodes to center the end node
   if (nonOverlappingNodes.length > 0 && endNode) {
@@ -227,6 +230,72 @@ async function layoutWithElk(nodes: Node[], edges: Edge[]): Promise<Node[]> {
   }
   
   return nonOverlappingNodes;
+}
+
+// Helper function to center parent nodes over their children
+function centerParentsOverChildren(nodes: Node[], edges: Edge[]): Node[] {
+  const adjustedNodes = [...nodes];
+  
+  // Build parent -> children map
+  const childrenMap = new Map<string, string[]>();
+  edges.forEach(edge => {
+    if (!childrenMap.has(edge.source)) {
+      childrenMap.set(edge.source, []);
+    }
+    childrenMap.get(edge.source)!.push(edge.target);
+  });
+  
+  // Function to get all parents in bottom-up order (leaves first)
+  const getTreeDepth = (nodeId: string): number => {
+    const children = childrenMap.get(nodeId) || [];
+    if (children.length === 0) return 0;
+    return 1 + Math.max(...children.map(child => getTreeDepth(child)));
+  };
+  
+  // Get all nodes with children, sorted by depth (deepest first)
+  const parentsWithChildren = Array.from(childrenMap.entries())
+    .filter(([, children]) => children.length > 0)
+    .map(([parentId]) => ({ 
+      id: parentId, 
+      depth: getTreeDepth(parentId) 
+    }))
+    .sort((a, b) => a.depth - b.depth); // Process deepest parents first
+  
+  // Center each parent over its children, starting from the bottom of the tree
+  parentsWithChildren.forEach(({ id: parentId }) => {
+    const children = childrenMap.get(parentId) || [];
+    if (children.length === 0) return;
+    
+    // Get current positions of all children
+    const childNodes = children
+      .map(childId => adjustedNodes.find(node => node.id === childId))
+      .filter(node => node !== undefined) as Node[];
+    
+    if (childNodes.length === 0) return;
+    
+    // Calculate the center point of all children
+    const childrenLeftmost = Math.min(...childNodes.map(child => child.position.x));
+    const childrenRightmost = Math.max(...childNodes.map(child => child.position.x + (child.width || 500)));
+    const childrenCenter = (childrenLeftmost + childrenRightmost) / 2;
+    
+    // Find the parent node and center it over children
+    const parentIndex = adjustedNodes.findIndex(node => node.id === parentId);
+    if (parentIndex !== -1) {
+      const parent = adjustedNodes[parentIndex];
+      const parentWidth = parent.width || 500;
+      const newParentX = childrenCenter - (parentWidth / 2);
+      
+      adjustedNodes[parentIndex] = {
+        ...parent,
+        position: {
+          ...parent.position,
+          x: newParentX
+        }
+      };
+    }
+  });
+  
+  return adjustedNodes;
 }
 
 // Helper function to fix actual node overlaps with minimal adjustments

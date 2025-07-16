@@ -170,10 +170,12 @@ async function layoutWithElk(nodes: Node[], edges: Edge[]): Promise<Node[]> {
     id: "root",
     // mrtree layout
     layoutOptions: {
-      "elk.algorithm": "mrtree", // Switch to Mr. Tree algorithm for proper tree layout
+      "elk.algorithm": "mrtree",
       "elk.direction": "DOWN",
-      "elk.spacing.nodeNode": "50", // Space between sibling nodes
-      "elk.spacing.edgeNode": "20", // Space between edges and nodes
+      "elk.spacing.nodeNode": "50",
+      "elk.spacing.edgeNode": "30", 
+      "elk.mrtree.compaction": "true", // Enable compaction for better spacing
+      "elk.mrtree.edgeRoutingMode": "AVOID_OVERLAP", // Explicit overlap avoidance
       "elk.padding": "[top=50,left=50,bottom=50,right=50]"
     },
     children: regularNodes.map((node) => ({
@@ -208,8 +210,8 @@ async function layoutWithElk(nodes: Node[], edges: Edge[]): Promise<Node[]> {
   // Center parent nodes over their children and propagate positioning
   const centeredNodes = centerParentsOverChildren(constrainedNodes, edges);
   
-  // Fix any remaining overlaps after centering
-  const nonOverlappingNodes = fixActualOverlaps(centeredNodes);
+  // Keep the parent centering since ELK doesn't handle this specific case
+  const nonOverlappingNodes = centeredNodes;
 
   // Calculate bounds of all regular nodes to center the end node
   if (nonOverlappingNodes.length > 0 && endNode) {
@@ -284,6 +286,7 @@ function centerParentsOverChildren(nodes: Node[], edges: Edge[]): Node[] {
       const parent = adjustedNodes[parentIndex];
       const parentWidth = parent.width || 500;
       const newParentX = childrenCenter - (parentWidth / 2);
+      const shiftAmount = newParentX - parent.position.x;
       
       adjustedNodes[parentIndex] = {
         ...parent,
@@ -292,14 +295,37 @@ function centerParentsOverChildren(nodes: Node[], edges: Edge[]): Node[] {
           x: newParentX
         }
       };
-    }
+      
+      // Recursively shift all descendants of this parent
+      const shiftSubtree = (nodeId: string, offsetX: number) => {
+        const children = childrenMap.get(nodeId) || [];
+        children.forEach(childId => {
+          const childIndex = adjustedNodes.findIndex(node => node.id === childId);
+          if (childIndex !== -1) {
+            adjustedNodes[childIndex] = {
+              ...adjustedNodes[childIndex],
+              position: {
+                ...adjustedNodes[childIndex].position,
+                x: adjustedNodes[childIndex].position.x + offsetX
+              }
+            };
+            // Recursively shift grandchildren
+            shiftSubtree(childId, offsetX);
+          }
+        });
+      };
+      
+      // Shift all descendants by the same amount as the parent
+      shiftSubtree(parentId, shiftAmount);
+     }
   });
   
   return adjustedNodes;
 }
 
 // Helper function to fix actual node overlaps with minimal adjustments
-function fixActualOverlaps(nodes: Node[]): Node[] {
+// Currently disabled to test ELK's built-in AVOID_OVERLAP feature
+/* function fixActualOverlaps(nodes: Node[]): Node[] {
   const adjustedNodes = [...nodes];
   const NODE_GAP = 20; // Minimal gap between nodes
   
@@ -350,7 +376,7 @@ function fixActualOverlaps(nodes: Node[]): Node[] {
   }
   
   return adjustedNodes;
-}
+} */
 
 // Helper function to constrain child nodes to be within reasonable vertical distance from parent
 function constrainChildrenToParent(nodes: Node[], edges: Edge[]): Node[] {

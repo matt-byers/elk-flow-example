@@ -2,6 +2,8 @@ import React, { useEffect, useState, useCallback } from "react";
 import ReactFlow, {
   Background,
   Controls,
+  Handle,
+  Position,
   applyNodeChanges,
   applyEdgeChanges,
   useReactFlow,
@@ -9,6 +11,7 @@ import ReactFlow, {
   type Node,
   type Edge,
   type NodeMouseHandler,
+  type NodeProps,
 } from "reactflow";
 import ELK from "elkjs/lib/elk.bundled.js";
 import "reactflow/dist/style.css";
@@ -17,39 +20,138 @@ const elk = new ELK();
 
 const END_NODE_ID = "end-node";
 
+// Custom node component with collapse/expand buttons
+function CustomNode({ id, data }: NodeProps) {
+  const { setNodes } = useReactFlow();
+  
+  const handleCollapse = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    updateNodeHeight(id, 100);
+  };
+  
+  const handleExpand = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    updateNodeHeight(id, data.originalHeight || 500);
+  };
+  
+  const updateNodeHeight = (nodeId: string, newHeight: number) => {
+    setNodes((nodes) => 
+      nodes.map((node) => {
+        if (node.id === nodeId) {
+          return {
+            ...node,
+            width: 500,
+            height: newHeight,
+            style: {
+              ...node.style,
+              width: 500,
+              height: newHeight,
+            },
+            data: {
+              ...node.data,
+              originalHeight: node.data.originalHeight || node.height || 500,
+            }
+          };
+        }
+        return node;
+      })
+    );
+  };
+  
+  const isEndNode = id === END_NODE_ID;
+  
+  return (
+    <div style={{
+      width: '500px',
+      height: '100%',
+      backgroundColor: isEndNode ? '#ffeb3b' : '#fff',
+      border: isEndNode ? '2px solid #f57f17' : '1px solid #ddd',
+      borderRadius: '5px',
+      boxSizing: 'border-box'
+    }}>
+      <Handle type="target" position={Position.Top} />
+      <div style={{ 
+        display: 'flex', 
+        flexDirection: 'column', 
+        height: '100%', 
+        padding: '10px',
+        position: 'relative'
+      }}>
+        <div style={{ 
+          position: 'absolute', 
+          top: '5px', 
+          right: '5px', 
+          display: 'flex', 
+          gap: '5px',
+          zIndex: 10
+        }}>
+          <button 
+            onClick={handleCollapse}
+            style={{
+              padding: '4px 8px',
+              fontSize: '12px',
+              backgroundColor: '#ff9800',
+              color: 'white',
+              border: 'none',
+              borderRadius: '3px',
+              cursor: 'pointer'
+            }}
+          >
+            Collapse
+          </button>
+          <button 
+            onClick={handleExpand}
+            style={{
+              padding: '4px 8px',
+              fontSize: '12px',
+              backgroundColor: '#4caf50',
+              color: 'white',
+              border: 'none',
+              borderRadius: '3px',
+              cursor: 'pointer'
+            }}
+          >
+            Expand
+          </button>
+        </div>
+        <div style={{ 
+          display: 'flex', 
+          alignItems: 'center', 
+          justifyContent: 'center', 
+          height: '100%',
+          fontSize: '16px'
+        }}>
+          {data.label}
+        </div>
+      </div>
+      <Handle type="source" position={Position.Bottom} />
+    </div>
+  );
+}
+
+const nodeTypes = {
+  customNode: CustomNode,
+};
+
 // Start with root node and end node
 const initialNodes: Node[] = [
   { 
     id: "root", 
-    data: { label: "Root" }, 
+    type: "customNode",
+    data: { label: "Root", originalHeight: 500 }, 
     position: { x: 0, y: 0 }, 
     width: 500, 
-    height: 300,
-    style: { 
-      width: 500, 
-      height: 300, 
-      fontSize: '16px',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center'
-    }
+    height: 500,
+    style: { width: 500, height: 500 }
   },
   { 
     id: END_NODE_ID, 
-    data: { label: "End" }, 
+    type: "customNode",
+    data: { label: "End", originalHeight: 500 }, 
     position: { x: 0, y: 0 }, 
     width: 500, 
-    height: 300,
-    style: { 
-      width: 500, 
-      height: 300, 
-      fontSize: '16px',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      backgroundColor: '#ffeb3b',
-      border: '2px solid #f57f17'
-    }
+    height: 500,
+    style: { width: 500, height: 500 }
   },
 ];
 
@@ -102,12 +204,15 @@ async function layoutWithElk(nodes: Node[], edges: Edge[]): Promise<Node[]> {
   
   // Constrain child nodes to be within reasonable vertical distance from their parent
   const constrainedNodes = constrainChildrenToParent(alignedNodes, edges);
+  
+  // Fix any actual node overlaps
+  const nonOverlappingNodes = fixActualOverlaps(constrainedNodes);
 
   // Calculate bounds of all regular nodes to center the end node
-  if (constrainedNodes.length > 0 && endNode) {
-    const minX = Math.min(...constrainedNodes.map(node => node.position.x));
-    const maxX = Math.max(...constrainedNodes.map(node => node.position.x + (node.width || 500)));
-    const maxY = Math.max(...constrainedNodes.map(node => node.position.y + (node.height || 300)));
+  if (nonOverlappingNodes.length > 0 && endNode) {
+    const minX = Math.min(...nonOverlappingNodes.map(node => node.position.x));
+    const maxX = Math.max(...nonOverlappingNodes.map(node => node.position.x + (node.width || 500)));
+    const maxY = Math.max(...nonOverlappingNodes.map(node => node.position.y + (node.height || 300)));
     
     // Center the end node horizontally and place it below all other nodes
     const centerX = (minX + maxX) / 2 - (endNode.width || 500) / 2;
@@ -118,10 +223,64 @@ async function layoutWithElk(nodes: Node[], edges: Edge[]): Promise<Node[]> {
       position: { x: centerX, y: endNodeY }
     };
     
-    return [...constrainedNodes, positionedEndNode];
+    return [...nonOverlappingNodes, positionedEndNode];
   }
   
-  return constrainedNodes;
+  return nonOverlappingNodes;
+}
+
+// Helper function to fix actual node overlaps with minimal adjustments
+function fixActualOverlaps(nodes: Node[]): Node[] {
+  const adjustedNodes = [...nodes];
+  const NODE_GAP = 20; // Minimal gap between nodes
+  
+  // Simple overlap detection - check all pairs of nodes
+  for (let i = 0; i < adjustedNodes.length; i++) {
+    for (let j = i + 1; j < adjustedNodes.length; j++) {
+      const nodeA = adjustedNodes[i];
+      const nodeB = adjustedNodes[j];
+      
+      // Check if nodes overlap horizontally and are at similar Y levels
+      const aLeft = nodeA.position.x;
+      const aRight = nodeA.position.x + (nodeA.width || 500);
+      const bLeft = nodeB.position.x;
+      const bRight = nodeB.position.x + (nodeB.width || 500);
+      
+      const aTop = nodeA.position.y;
+      const aBottom = nodeA.position.y + (nodeA.height || 300);
+      const bTop = nodeB.position.y;
+      const bBottom = nodeB.position.y + (nodeB.height || 300);
+      
+      // Check for overlap (both horizontal and vertical)
+      const horizontalOverlap = aLeft < bRight + NODE_GAP && bLeft < aRight + NODE_GAP;
+      const verticalOverlap = aTop < bBottom && bTop < aBottom;
+      
+      if (horizontalOverlap && verticalOverlap) {
+        // Push the rightmost node further right
+        if (nodeB.position.x > nodeA.position.x) {
+          const shiftAmount = aRight + NODE_GAP - bLeft;
+          adjustedNodes[j] = {
+            ...nodeB,
+            position: {
+              ...nodeB.position,
+              x: nodeB.position.x + shiftAmount
+            }
+          };
+        } else {
+          const shiftAmount = bRight + NODE_GAP - aLeft;
+          adjustedNodes[i] = {
+            ...nodeA,
+            position: {
+              ...nodeA.position,
+              x: nodeA.position.x + shiftAmount
+            }
+          };
+        }
+      }
+    }
+  }
+  
+  return adjustedNodes;
 }
 
 // Helper function to constrain child nodes to be within reasonable vertical distance from parent
@@ -234,18 +393,12 @@ function Flow() {
     const newNodeId = `node-${nodeCounter}`;
     const newNode: Node = {
       id: newNodeId,
-      data: { label: newNodeLabel },
+      type: "customNode",
+      data: { label: newNodeLabel, originalHeight: randomHeight },
       position: { x: 0, y: 0 }, // Will be positioned by ELK
       width: 500,
       height: randomHeight,
-      style: { 
-        width: 500, 
-        height: randomHeight, 
-        fontSize: '16px',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center'
-      }
+      style: { width: 500, height: randomHeight }
     };
 
     // Update edges:
@@ -277,12 +430,12 @@ function Flow() {
     setNodeCounter((prev) => prev + 1);
   }, [nodeCounter]);
 
-  // Apply layout whenever nodes or edges change
+  // Apply layout whenever nodes or edges change (including height changes)
   useEffect(() => {
     if (nodes.length > 0) {
       applyLayout();
     }
-  }, [nodes.length, edges.length]);
+  }, [nodes.length, edges.length, nodes.map(n => n.height).join(',')]);
 
   const resetGraph = useCallback(() => {
     setNodes(initialNodes);
@@ -300,21 +453,10 @@ function Flow() {
           Reset
         </button>
       </div>
-      <div style={{ 
-        position: "absolute", 
-        zIndex: 10, 
-        top: 10, 
-        right: 10, 
-        background: "rgba(255,255,255,0.9)", 
-        padding: "10px", 
-        borderRadius: "5px",
-        fontSize: "12px"
-      }}>
-        Click any node (except yellow end node) to add a child
-      </div>
       <ReactFlow
         nodes={nodes}
         edges={edges}
+        nodeTypes={nodeTypes}
         onNodesChange={(changes) => setNodes((nds) => applyNodeChanges(changes, nds))}
         onEdgesChange={(changes) => setEdges((eds) => applyEdgeChanges(changes, eds))}
         onNodeClick={onNodeClick}

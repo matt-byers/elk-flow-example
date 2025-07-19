@@ -196,17 +196,25 @@ function calculateSubtreeWidths(nodes: Node[], edges: Edge[]): (Node & { elkWidt
 }
 
 async function layoutWithElk(nodes: Node[], edges: Edge[]): Promise<Node[]> {
-  // Separate end node from other nodes
+  // Separate main tree nodes from output tree nodes
   const endNode = nodes.find(node => node.id === END_NODE_ID);
-  const regularNodes = nodes.filter(node => node.id !== END_NODE_ID);
+  const outputTreeNodeIds = getOutputTreeDescendants(edges);
+  const outputTreeNodes = nodes.filter(node => outputTreeNodeIds.includes(node.id));
+  const mainTreeNodes = nodes.filter(node => 
+    node.id !== END_NODE_ID && !outputTreeNodeIds.includes(node.id)
+  );
+
+  // Layout main tree (excluding connections to output node)
+  const mainTreeEdges = edges.filter(edge => 
+    edge.target !== END_NODE_ID && 
+    !outputTreeNodeIds.includes(edge.source) && 
+    !outputTreeNodeIds.includes(edge.target)
+  );
   
-  // Calculate subtree widths and update node widths before ELK layout
-  const nodesWithSubtreeWidths = calculateSubtreeWidths(regularNodes, edges);
+  const mainNodesWithSubtreeWidths = calculateSubtreeWidths(mainTreeNodes, mainTreeEdges);
   
-  // Only layout regular nodes (not the end node)
-  const elkGraph = {
-    id: "root",
-    // mrtree layout
+  const mainElkGraph = {
+    id: "main-root",
     layoutOptions: {
       "elk.algorithm": "mrtree",
       "elk.direction": "DOWN",
@@ -216,54 +224,130 @@ async function layoutWithElk(nodes: Node[], edges: Edge[]): Promise<Node[]> {
       "elk.mrtree.edgeRoutingMode": "AVOID_OVERLAP",
       "elk.padding": "[top=50,left=50,bottom=50,right=50]"
     },
-    children: nodesWithSubtreeWidths.map((node: Node & { elkWidth: number }) => ({
+    children: mainNodesWithSubtreeWidths.map((node: Node & { elkWidth: number }) => ({
       id: node.id,
-      width: node.elkWidth, // Use calculated subtree width for ELK positioning
+      width: node.elkWidth,
       height: node.height || 300,
     })),
-    edges: edges.filter(edge => edge.target !== END_NODE_ID).map((edge) => ({
+    edges: mainTreeEdges.map((edge) => ({
       id: edge.id,
       sources: [edge.source],
       targets: [edge.target],
     })),
   };
 
-  const layout = await elk.layout(elkGraph);
+  const mainLayout = await elk.layout(mainElkGraph);
   
-  // Position regular nodes based on ELK layout (restore original widths for rendering)
-  const laidOutNodes = regularNodes.map((node) => {
-    const layoutNode = layout.children?.find((n) => n.id === node.id);
+  // Position main tree nodes
+  const mainLaidOutNodes = mainTreeNodes.map((node) => {
+    const layoutNode = mainLayout.children?.find((n) => n.id === node.id);
     return {
       ...node,
       position: { x: layoutNode?.x || 0, y: layoutNode?.y || 0 },
-      width: 500, // Restore original 500px width for rendering
+      width: 500,
     };
   });
 
-  // Post-processing: align siblings, center parents over children, and constrain parent-child distance
-  const alignedNodes = alignSiblingsAtTop(laidOutNodes, edges);
-  const centeredNodes = centerParentsOverChildren(alignedNodes, edges);
-  const nonOverlappingNodes = constrainChildrenToParent(centeredNodes, edges);
+  // Apply post-processing to main tree
+  const alignedMainNodes = alignSiblingsAtTop(mainLaidOutNodes, mainTreeEdges);
+  const centeredMainNodes = centerParentsOverChildren(alignedMainNodes, mainTreeEdges);
+  const finalMainNodes = constrainChildrenToParent(centeredMainNodes, mainTreeEdges);
 
-  // Calculate bounds of all regular nodes to center the end node
-  if (nonOverlappingNodes.length > 0 && endNode) {
-    const minX = Math.min(...nonOverlappingNodes.map(node => node.position.x));
-    const maxX = Math.max(...nonOverlappingNodes.map(node => node.position.x + (node.width || 500)));
-    const maxY = Math.max(...nonOverlappingNodes.map(node => node.position.y + (node.height || 300)));
-    
-    // Center the end node horizontally and place it below all other nodes
-    const centerX = (minX + maxX) / 2 - (endNode.width || 500) / 2;
-    const endNodeY = maxY + 100; // 100px gap below the lowest node
-    
-    const positionedEndNode = {
-      ...endNode,
-      position: { x: centerX, y: endNodeY }
-    };
-    
-    return [...nonOverlappingNodes, positionedEndNode];
-  }
+  // Position output node below main tree
+  const mainTreeBounds = finalMainNodes.length > 0 ? {
+    minX: Math.min(...finalMainNodes.map(node => node.position.x)),
+    maxX: Math.max(...finalMainNodes.map(node => node.position.x + (node.width || 500))),
+    maxY: Math.max(...finalMainNodes.map(node => node.position.y + (node.height || 300)))
+  } : { minX: 0, maxX: 500, maxY: 0 };
   
-  return nonOverlappingNodes;
+  const centerX = (mainTreeBounds.minX + mainTreeBounds.maxX) / 2 - ((endNode?.width || 500) / 2);
+  const endNodeY = mainTreeBounds.maxY + 100;
+  
+  const positionedEndNode = endNode ? {
+    ...endNode,
+    position: { x: centerX, y: endNodeY }
+  } : null;
+
+  // Layout output tree if it exists
+  let finalOutputNodes: Node[] = [];
+  if (outputTreeNodes.length > 0 && positionedEndNode) {
+    const outputTreeEdges = edges.filter(edge => 
+      outputTreeNodeIds.includes(edge.source) && outputTreeNodeIds.includes(edge.target)
+    );
+    
+    const outputTreeWithEnd = [positionedEndNode, ...outputTreeNodes];
+    const outputNodesWithWidths = calculateSubtreeWidths(outputTreeWithEnd, [
+      ...edges.filter(edge => edge.source === END_NODE_ID),
+      ...outputTreeEdges
+    ]);
+    
+    const outputElkGraph = {
+      id: "output-root",
+      layoutOptions: {
+        "elk.algorithm": "mrtree",
+        "elk.direction": "DOWN",
+        "elk.spacing.nodeNode": "50",
+        "elk.spacing.edgeNode": "30", 
+        "elk.mrtree.compaction": "true",
+        "elk.mrtree.edgeRoutingMode": "AVOID_OVERLAP",
+        "elk.padding": "[top=50,left=50,bottom=50,right=50]"
+      },
+      children: outputNodesWithWidths.map((node: Node & { elkWidth: number }) => ({
+        id: node.id,
+        width: node.elkWidth,
+        height: node.height || 300,
+      })),
+      edges: [
+        ...edges.filter(edge => edge.source === END_NODE_ID),
+        ...outputTreeEdges
+      ].map((edge) => ({
+        id: edge.id,
+        sources: [edge.source],
+        targets: [edge.target],
+      })),
+    };
+
+    const outputLayout = await elk.layout(outputElkGraph);
+    
+    // Position output tree relative to where we want the end node
+    const elkEndPosition = outputLayout.children?.find(n => n.id === END_NODE_ID);
+    const offsetX = positionedEndNode.position.x - (elkEndPosition?.x || 0);
+    const offsetY = positionedEndNode.position.y - (elkEndPosition?.y || 0);
+    
+    const outputLaidOutNodes = outputTreeWithEnd.map((node) => {
+      const layoutNode = outputLayout.children?.find((n) => n.id === node.id);
+      return {
+        ...node,
+        position: { 
+          x: (layoutNode?.x || 0) + offsetX, 
+          y: (layoutNode?.y || 0) + offsetY 
+        },
+        width: 500,
+      };
+    });
+
+    // Apply post-processing to output tree
+    const alignedOutputNodes = alignSiblingsAtTop(outputLaidOutNodes, [
+      ...edges.filter(edge => edge.source === END_NODE_ID),
+      ...outputTreeEdges
+    ]);
+    const centeredOutputNodes = centerParentsOverChildren(alignedOutputNodes, [
+      ...edges.filter(edge => edge.source === END_NODE_ID),
+      ...outputTreeEdges
+    ]);
+    finalOutputNodes = constrainChildrenToParent(centeredOutputNodes, [
+      ...edges.filter(edge => edge.source === END_NODE_ID),
+      ...outputTreeEdges
+    ]);
+  }
+
+  if (finalOutputNodes.length > 0) {
+    return [...finalMainNodes, ...finalOutputNodes];
+  } else if (positionedEndNode) {
+    return [...finalMainNodes, positionedEndNode];
+  } else {
+    return finalMainNodes;
+  }
 }
 
 // Helper function to center parent nodes over their children (preserves ELK spacing)
@@ -467,6 +551,33 @@ function alignSiblingsAtTop(nodes: Node[], edges: Edge[]): Node[] {
   return alignedNodes;
 }
 
+// Helper function to check if a node is a descendant of the output node
+function isDescendantOfOutput(nodeId: string, edges: Edge[]): boolean {
+  // Find all ancestors of the given node by traversing upward
+  const getAncestors = (id: string): string[] => {
+    const parentEdge = edges.find(edge => edge.target === id);
+    if (!parentEdge) return [];
+    return [parentEdge.source, ...getAncestors(parentEdge.source)];
+  };
+  
+  const ancestors = getAncestors(nodeId);
+  return ancestors.includes(END_NODE_ID);
+}
+
+// Helper function to get all descendants of the output node
+function getOutputTreeDescendants(edges: Edge[]): string[] {
+  const getDescendants = (nodeId: string): string[] => {
+    const children = edges.filter(edge => edge.source === nodeId).map(edge => edge.target);
+    const allDescendants = [...children];
+    children.forEach(childId => {
+      allDescendants.push(...getDescendants(childId));
+    });
+    return allDescendants;
+  };
+  
+  return getDescendants(END_NODE_ID);
+}
+
 function Flow() {
   const [nodes, setNodes] = useState<Node[]>(initialNodes);
   const [edges, setEdges] = useState<Edge[]>(initialEdges);
@@ -482,11 +593,6 @@ function Flow() {
 
   const onNodeClick: NodeMouseHandler = useCallback((event, node) => {
     event.stopPropagation();
-    
-    // Don't do anything if clicking the end node
-    if (node.id === END_NODE_ID) {
-      return;
-    }
     
     // Build the hierarchical name based on parent's label
     const parentLabel = node.data.label as string;
@@ -507,29 +613,57 @@ function Flow() {
       style: { width: 500, height: randomHeight }
     };
 
-    // Update edges:
-    // 1. Remove any existing edge from clicked node to end node
-    // 2. Add edge from clicked node to new node
-    // 3. Add edge from new node to end node
-    setEdges((prevEdges) => {
-      const filteredEdges = prevEdges.filter(edge => 
-        !(edge.source === node.id && edge.target === END_NODE_ID)
-      );
-      
-      return [
-        ...filteredEdges,
+    // Update edges based on which node was clicked
+    if (node.id === END_NODE_ID) {
+      // If clicking the output node, just add a child to it (no connection back to output)
+      setEdges((prevEdges) => [
+        ...prevEdges,
         {
           id: `edge-${node.id}-${newNodeId}`,
           source: node.id,
           target: newNodeId,
-        },
-        {
-          id: `edge-${newNodeId}-${END_NODE_ID}`,
-          source: newNodeId,
-          target: END_NODE_ID,
         }
-      ];
-    });
+      ]);
+    } else {
+      // Check if the clicked node is a descendant of the output node
+      const isOutputTreeNode = isDescendantOfOutput(node.id, edges);
+      
+      if (isOutputTreeNode) {
+        // For output tree nodes: just add child, no connection back to output
+        setEdges((prevEdges) => [
+          ...prevEdges,
+          {
+            id: `edge-${node.id}-${newNodeId}`,
+            source: node.id,
+            target: newNodeId,
+          }
+        ]);
+      } else {
+        // Original behavior for main tree nodes:
+        // 1. Remove any existing edge from clicked node to end node
+        // 2. Add edge from clicked node to new node
+        // 3. Add edge from new node to end node
+        setEdges((prevEdges) => {
+          const filteredEdges = prevEdges.filter(edge => 
+            !(edge.source === node.id && edge.target === END_NODE_ID)
+          );
+          
+          return [
+            ...filteredEdges,
+            {
+              id: `edge-${node.id}-${newNodeId}`,
+              source: node.id,
+              target: newNodeId,
+            },
+            {
+              id: `edge-${newNodeId}-${END_NODE_ID}`,
+              source: newNodeId,
+              target: END_NODE_ID,
+            }
+          ];
+        });
+      }
+    }
 
     // Add the new node
     setNodes((prevNodes) => [...prevNodes, newNode]);

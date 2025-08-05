@@ -327,9 +327,10 @@ function centerInputNodeForSkewedGraph(nodes: Node[], edges: Edge[]): Node[] {
 }
 
 /**
- * FIX BEX-1665: Apply consistent edge styling with improved connection points to eliminate gaps
+ * FIX BEX-1852: Apply consistent edge styling with clean straight edges to eliminate kinks
+ * Changed from 'smoothstep' to 'straight' to prevent unwanted bends and kinks in edge rendering
  * @param edges - Array of edges to style
- * @returns Styled edge array with consistent properties and precise node connections
+ * @returns Styled edge array with consistent properties and clean straight connections
  */
 function applyConsistentEdgeStyles(edges: Edge[]): Edge[] {
   return edges.map(edge => ({
@@ -338,7 +339,7 @@ function applyConsistentEdgeStyles(edges: Edge[]): Edge[] {
       strokeWidth: EDGE_THICKNESS,
       stroke: EDGE_COLOR,
     },
-    type: 'smoothstep', // Use smoothstep for consistent curved edges
+    type: 'straight', // FIX BEX-1852: Changed from 'smoothstep' to 'straight' to eliminate kinks
     animated: false,
     markerEnd: {
       type: 'arrowclosed',
@@ -393,9 +394,11 @@ async function layoutWithElk(nodes: Node[], edges: Edge[]): Promise<Node[]> {
         "elk.spacing.edgeEdge": EDGE_SPACING.toString(), // Consistent spacing between edges
         "elk.layered.spacing.edgeNodeBetweenLayers": LAYER_EDGE_SPACING.toString(), // Consistent vertical edge spacing
         "elk.layered.spacing.edgeEdgeBetweenLayers": EDGE_SPACING.toString(), // Consistent edge-to-edge spacing
-        // FIX BEX-1665: Additional settings to ensure proper edge-to-node connections
-        "elk.edgeRouting": "ORTHOGONAL", // Use orthogonal routing for cleaner connections
+        // FIX BEX-1852: Updated edge routing settings for straight line connections
+        "elk.edgeRouting": "STRAIGHT", // Use straight routing for clean, unkinking connections
         "elk.layered.considerModelOrder.strategy": "PREFER_NODES", // Prioritize node positioning over edge routing
+        // Additional settings to ensure clean edge rendering
+        "elk.mrtree.portConstraints": "FIXED_SIDES", // Fixed port constraints for consistent edge connections
       },
       children: mainNodesWithSubtreeWidths.map((node: Node & { elkWidth: number }) => ({
         id: node.id,
@@ -474,9 +477,10 @@ async function layoutWithElk(nodes: Node[], edges: Edge[]): Promise<Node[]> {
           "elk.spacing.edgeEdge": EDGE_SPACING.toString(),
           "elk.layered.spacing.edgeNodeBetweenLayers": LAYER_EDGE_SPACING.toString(),
           "elk.layered.spacing.edgeEdgeBetweenLayers": EDGE_SPACING.toString(),
-          // FIX BEX-1665: Same edge routing improvements for output tree
-          "elk.edgeRouting": "ORTHOGONAL",
+          // FIX BEX-1852: Same straight edge routing improvements for output tree
+          "elk.edgeRouting": "STRAIGHT",
           "elk.layered.considerModelOrder.strategy": "PREFER_NODES",
+          "elk.mrtree.portConstraints": "FIXED_SIDES",
         },
         children: outputNodesWithWidths.map((node: Node & { elkWidth: number }) => ({
           id: node.id,

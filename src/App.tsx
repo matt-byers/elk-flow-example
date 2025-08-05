@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useMemo } from "react";
 import ReactFlow, {
   Background,
   Controls,
@@ -20,6 +20,14 @@ const elk = new ELK();
 
 const END_NODE_ID = "end-node";
 
+// Constants for better maintainability
+const DEFAULT_NODE_WIDTH = 500;
+const DEFAULT_NODE_HEIGHT = 300;
+const VERTICAL_SPACING = 100;
+const NODE_SPACING = 50;
+const MIN_RANDOM_HEIGHT = 200;
+const MAX_RANDOM_HEIGHT = 500;
+
 // Custom node component with collapse/expand buttons
 function CustomNode({ id, data }: NodeProps) {
   const { setNodes } = useReactFlow();
@@ -31,7 +39,7 @@ function CustomNode({ id, data }: NodeProps) {
   
   const handleExpand = (e: React.MouseEvent) => {
     e.stopPropagation();
-    updateNodeHeight(id, data.originalHeight || 500);
+    updateNodeHeight(id, data.originalHeight || DEFAULT_NODE_HEIGHT);
   };
   
   const updateNodeHeight = (nodeId: string, newHeight: number) => {
@@ -40,16 +48,16 @@ function CustomNode({ id, data }: NodeProps) {
         if (node.id === nodeId) {
           return {
             ...node,
-            width: 500,
+            width: DEFAULT_NODE_WIDTH,
             height: newHeight,
             style: {
               ...node.style,
-              width: 500,
+              width: DEFAULT_NODE_WIDTH,
               height: newHeight,
             },
             data: {
               ...node.data,
-              originalHeight: node.data.originalHeight || node.height || 500,
+              originalHeight: node.data.originalHeight || node.height || DEFAULT_NODE_HEIGHT,
             }
           };
         }
@@ -62,7 +70,7 @@ function CustomNode({ id, data }: NodeProps) {
   
   return (
     <div style={{
-      width: '500px',
+      width: `${DEFAULT_NODE_WIDTH}px`,
       height: '100%',
       backgroundColor: isEndNode ? '#ffeb3b' : '#fff',
       border: isEndNode ? '2px solid #f57f17' : '1px solid #ddd',
@@ -87,6 +95,7 @@ function CustomNode({ id, data }: NodeProps) {
         }}>
           <button 
             onClick={handleCollapse}
+            aria-label="Collapse node"
             style={{
               padding: '4px 8px',
               fontSize: '12px',
@@ -101,6 +110,7 @@ function CustomNode({ id, data }: NodeProps) {
           </button>
           <button 
             onClick={handleExpand}
+            aria-label="Expand node"
             style={{
               padding: '4px 8px',
               fontSize: '12px',
@@ -138,20 +148,20 @@ const initialNodes: Node[] = [
   { 
     id: "root", 
     type: "customNode",
-    data: { label: "Root", originalHeight: 500 }, 
+    data: { label: "Root", originalHeight: DEFAULT_NODE_HEIGHT }, 
     position: { x: 0, y: 0 }, 
-    width: 500, 
-    height: 500,
-    style: { width: 500, height: 500 }
+    width: DEFAULT_NODE_WIDTH, 
+    height: DEFAULT_NODE_HEIGHT,
+    style: { width: DEFAULT_NODE_WIDTH, height: DEFAULT_NODE_HEIGHT }
   },
   { 
     id: END_NODE_ID, 
     type: "customNode",
-    data: { label: "End", originalHeight: 500 }, 
+    data: { label: "End", originalHeight: DEFAULT_NODE_HEIGHT }, 
     position: { x: 0, y: 0 }, 
-    width: 500, 
-    height: 500,
-    style: { width: 500, height: 500 }
+    width: DEFAULT_NODE_WIDTH, 
+    height: DEFAULT_NODE_HEIGHT,
+    style: { width: DEFAULT_NODE_WIDTH, height: DEFAULT_NODE_HEIGHT }
   },
 ];
 
@@ -175,17 +185,17 @@ function calculateSubtreeWidths(nodes: Node[], edges: Edge[]): (Node & { elkWidt
   const calculateNodeSubtreeWidth = (nodeId: string): number => {
     const children = childrenMap.get(nodeId) || [];
     if (children.length === 0) {
-      return 500; // Leaf node uses its own width
+      return DEFAULT_NODE_WIDTH; // Leaf node uses its own width
     }
     
     // Calculate total width needed for all children side by side
     const childWidths = children.map(childId => calculateNodeSubtreeWidth(childId));
     const totalChildWidth = childWidths.reduce((sum, width) => sum + width, 0);
-    const spacingBetweenChildren = (children.length - 1) * 100; // 100px spacing between siblings
+    const spacingBetweenChildren = (children.length - 1) * VERTICAL_SPACING; // spacing between siblings
     const minSubtreeWidth = totalChildWidth + spacingBetweenChildren;
     
     // Node should be at least as wide as its subtree needs
-    return Math.max(500, minSubtreeWidth);
+    return Math.max(DEFAULT_NODE_WIDTH, minSubtreeWidth);
   };
   
   // Return nodes with calculated ELK widths
@@ -195,158 +205,250 @@ function calculateSubtreeWidths(nodes: Node[], edges: Edge[]): (Node & { elkWidt
   }));
 }
 
-async function layoutWithElk(nodes: Node[], edges: Edge[]): Promise<Node[]> {
-  // Separate main tree nodes from output tree nodes
-  const endNode = nodes.find(node => node.id === END_NODE_ID);
-  const outputTreeNodeIds = getOutputTreeDescendants(edges);
-  const outputTreeNodes = nodes.filter(node => outputTreeNodeIds.includes(node.id));
-  const mainTreeNodes = nodes.filter(node => 
-    node.id !== END_NODE_ID && !outputTreeNodeIds.includes(node.id)
-  );
-
-  // Layout main tree (excluding connections to output node)
-  const mainTreeEdges = edges.filter(edge => 
-    edge.target !== END_NODE_ID && 
-    !outputTreeNodeIds.includes(edge.source) && 
-    !outputTreeNodeIds.includes(edge.target)
-  );
+/**
+ * Enhanced centering logic specifically for skewed/asymmetric graphs.
+ * This function centers root nodes over their entire subtree, regardless of asymmetry.
+ * @param nodes - Array of graph nodes
+ * @param edges - Array of edges connecting the nodes
+ * @returns Adjusted array of nodes with updated positions
+ */
+function centerInputNodeForSkewedGraph(nodes: Node[], edges: Edge[]): Node[] {
+  const adjustedNodes = [...nodes];
   
-  const mainNodesWithSubtreeWidths = calculateSubtreeWidths(mainTreeNodes, mainTreeEdges);
+  // Find the root node (node with no incoming edges, excluding END_NODE_ID)
+  const hasIncomingEdge = new Set(edges.map(e => e.target));
+  const rootNodes = nodes.filter(node => !hasIncomingEdge.has(node.id) && node.id !== END_NODE_ID);
   
-  const mainElkGraph = {
-    id: "main-root",
-    layoutOptions: {
-      "elk.algorithm": "mrtree",
-      "elk.direction": "DOWN",
-      "elk.spacing.nodeNode": "50",
-      "elk.spacing.edgeNode": "30", 
-      "elk.mrtree.compaction": "true",
-      "elk.mrtree.edgeRoutingMode": "AVOID_OVERLAP",
-      "elk.padding": "[top=50,left=50,bottom=50,right=50]"
-    },
-    children: mainNodesWithSubtreeWidths.map((node: Node & { elkWidth: number }) => ({
-      id: node.id,
-      width: node.elkWidth,
-      height: node.height || 300,
-    })),
-    edges: mainTreeEdges.map((edge) => ({
-      id: edge.id,
-      sources: [edge.source],
-      targets: [edge.target],
-    })),
-  };
-
-  const mainLayout = await elk.layout(mainElkGraph);
+  if (rootNodes.length === 0) return adjustedNodes;
   
-  // Position main tree nodes
-  const mainLaidOutNodes = mainTreeNodes.map((node) => {
-    const layoutNode = mainLayout.children?.find((n) => n.id === node.id);
-    return {
-      ...node,
-      position: { x: layoutNode?.x || 0, y: layoutNode?.y || 0 },
-      width: 500,
+  // For each root node, calculate the overall bounds of its entire subtree
+  rootNodes.forEach(rootNode => {
+    const rootIndex = adjustedNodes.findIndex(n => n.id === rootNode.id);
+    if (rootIndex === -1) return;
+    
+    // Get all descendants of this root node using iterative approach to prevent stack overflow
+    const getDescendants = (nodeId: string): Node[] => {
+      const result: Node[] = [];
+      const visited = new Set<string>();
+      const stack = [nodeId];
+      
+      while (stack.length > 0) {
+        const currentId = stack.pop()!;
+        if (visited.has(currentId)) continue;
+        visited.add(currentId);
+        
+        const childEdges = edges.filter(e => e.source === currentId);
+        const children = childEdges
+          .map(e => adjustedNodes.find(n => n.id === e.target))
+          .filter(Boolean) as Node[];
+        
+        result.push(...children);
+        stack.push(...children.map(c => c.id));
+      }
+      
+      return result;
+    };
+    
+    const descendants = getDescendants(rootNode.id);
+    if (descendants.length === 0) return;
+    
+    // Calculate the overall bounds of all descendants
+    const leftmostX = Math.min(...descendants.map(n => n.position.x));
+    const rightmostX = Math.max(...descendants.map(n => n.position.x + (n.width || DEFAULT_NODE_WIDTH)));
+    const subtreeCenterX = (leftmostX + rightmostX) / 2;
+    
+    // Center the root node over the entire subtree
+    const rootWidth = rootNode.width || DEFAULT_NODE_WIDTH;
+    const newRootX = subtreeCenterX - (rootWidth / 2);
+    
+    // Update the root node position
+    adjustedNodes[rootIndex] = {
+      ...adjustedNodes[rootIndex],
+      position: {
+        ...adjustedNodes[rootIndex].position,
+        x: newRootX
+      }
     };
   });
-
-  // Apply post-processing to main tree
-  const alignedMainNodes = alignSiblingsAtTop(mainLaidOutNodes, mainTreeEdges);
-  const centeredMainNodes = centerParentsOverChildren(alignedMainNodes, mainTreeEdges);
-  const finalMainNodes = constrainChildrenToParent(centeredMainNodes, mainTreeEdges);
-
-  // Position output node below main tree
-  const mainTreeBounds = finalMainNodes.length > 0 ? {
-    minX: Math.min(...finalMainNodes.map(node => node.position.x)),
-    maxX: Math.max(...finalMainNodes.map(node => node.position.x + (node.width || 500))),
-    maxY: Math.max(...finalMainNodes.map(node => node.position.y + (node.height || 300)))
-  } : { minX: 0, maxX: 500, maxY: 0 };
   
-  const centerX = (mainTreeBounds.minX + mainTreeBounds.maxX) / 2 - ((endNode?.width || 500) / 2);
-  const endNodeY = mainTreeBounds.maxY + 100;
-  
-  const positionedEndNode = endNode ? {
-    ...endNode,
-    position: { x: centerX, y: endNodeY }
-  } : null;
+  return adjustedNodes;
+}
 
-  // Layout output tree if it exists
-  let finalOutputNodes: Node[] = [];
-  if (outputTreeNodes.length > 0 && positionedEndNode) {
-    const outputTreeEdges = edges.filter(edge => 
-      outputTreeNodeIds.includes(edge.source) && outputTreeNodeIds.includes(edge.target)
+/**
+ * Enhanced layout function with improved centering for skewed graphs
+ */
+async function layoutWithElk(nodes: Node[], edges: Edge[]): Promise<Node[]> {
+  try {
+    // Separate main tree nodes from output tree nodes
+    const endNode = nodes.find(node => node.id === END_NODE_ID);
+    const outputTreeNodeIds = getOutputTreeDescendants(edges);
+    const outputTreeNodes = nodes.filter(node => outputTreeNodeIds.includes(node.id));
+    const mainTreeNodes = nodes.filter(node => 
+      node.id !== END_NODE_ID && !outputTreeNodeIds.includes(node.id)
+    );
+
+    // Layout main tree (excluding connections to output node)
+    const mainTreeEdges = edges.filter(edge => 
+      edge.target !== END_NODE_ID && 
+      !outputTreeNodeIds.includes(edge.source) && 
+      !outputTreeNodeIds.includes(edge.target)
     );
     
-    const outputTreeWithEnd = [positionedEndNode, ...outputTreeNodes];
-    const outputNodesWithWidths = calculateSubtreeWidths(outputTreeWithEnd, [
-      ...edges.filter(edge => edge.source === END_NODE_ID),
-      ...outputTreeEdges
-    ]);
+    const mainNodesWithSubtreeWidths = calculateSubtreeWidths(mainTreeNodes, mainTreeEdges);
     
-    const outputElkGraph = {
-      id: "output-root",
+    const mainElkGraph = {
+      id: "main-root",
       layoutOptions: {
         "elk.algorithm": "mrtree",
         "elk.direction": "DOWN",
-        "elk.spacing.nodeNode": "50",
+        "elk.spacing.nodeNode": NODE_SPACING.toString(),
         "elk.spacing.edgeNode": "30", 
         "elk.mrtree.compaction": "true",
         "elk.mrtree.edgeRoutingMode": "AVOID_OVERLAP",
+        "elk.mrtree.searchOrder": "DFS", // Depth-first search for better centering
+        "elk.mrtree.weighting": "MODEL_ORDER", // Respect model order for positioning
         "elk.padding": "[top=50,left=50,bottom=50,right=50]"
       },
-      children: outputNodesWithWidths.map((node: Node & { elkWidth: number }) => ({
+      children: mainNodesWithSubtreeWidths.map((node: Node & { elkWidth: number }) => ({
         id: node.id,
         width: node.elkWidth,
-        height: node.height || 300,
+        height: node.height || DEFAULT_NODE_HEIGHT,
       })),
-      edges: [
-        ...edges.filter(edge => edge.source === END_NODE_ID),
-        ...outputTreeEdges
-      ].map((edge) => ({
+      edges: mainTreeEdges.map((edge) => ({
         id: edge.id,
         sources: [edge.source],
         targets: [edge.target],
       })),
     };
 
-    const outputLayout = await elk.layout(outputElkGraph);
+    const mainLayout = await elk.layout(mainElkGraph);
     
-    // Position output tree relative to where we want the end node
-    const elkEndPosition = outputLayout.children?.find(n => n.id === END_NODE_ID);
-    const offsetX = positionedEndNode.position.x - (elkEndPosition?.x || 0);
-    const offsetY = positionedEndNode.position.y - (elkEndPosition?.y || 0);
-    
-    const outputLaidOutNodes = outputTreeWithEnd.map((node) => {
-      const layoutNode = outputLayout.children?.find((n) => n.id === node.id);
+    // Position main tree nodes
+    const mainLaidOutNodes = mainTreeNodes.map((node) => {
+      const layoutNode = mainLayout.children?.find((n) => n.id === node.id);
       return {
         ...node,
-        position: { 
-          x: (layoutNode?.x || 0) + offsetX, 
-          y: (layoutNode?.y || 0) + offsetY 
-        },
-        width: 500,
+        position: { x: layoutNode?.x || 0, y: layoutNode?.y || 0 },
+        width: DEFAULT_NODE_WIDTH,
       };
     });
 
-    // Apply post-processing to output tree
-    const alignedOutputNodes = alignSiblingsAtTop(outputLaidOutNodes, [
-      ...edges.filter(edge => edge.source === END_NODE_ID),
-      ...outputTreeEdges
-    ]);
-    const centeredOutputNodes = centerParentsOverChildren(alignedOutputNodes, [
-      ...edges.filter(edge => edge.source === END_NODE_ID),
-      ...outputTreeEdges
-    ]);
-    finalOutputNodes = constrainChildrenToParent(centeredOutputNodes, [
-      ...edges.filter(edge => edge.source === END_NODE_ID),
-      ...outputTreeEdges
-    ]);
-  }
+    // Apply enhanced post-processing to main tree
+    const alignedMainNodes = alignSiblingsAtTop(mainLaidOutNodes, mainTreeEdges);
+    const centeredMainNodes = centerParentsOverChildren(alignedMainNodes, mainTreeEdges);
+    
+    // ENHANCED: Apply additional centering for skewed graphs
+    const skewCorrectedNodes = centerInputNodeForSkewedGraph(centeredMainNodes, mainTreeEdges);
+    
+    const finalMainNodes = constrainChildrenToParent(skewCorrectedNodes, mainTreeEdges);
 
-  if (finalOutputNodes.length > 0) {
-    return [...finalMainNodes, ...finalOutputNodes];
-  } else if (positionedEndNode) {
-    return [...finalMainNodes, positionedEndNode];
-  } else {
-    return finalMainNodes;
+    // Position output node below main tree
+    const mainTreeBounds = finalMainNodes.length > 0 ? {
+      minX: Math.min(...finalMainNodes.map(node => node.position.x)),
+      maxX: Math.max(...finalMainNodes.map(node => node.position.x + (node.width || DEFAULT_NODE_WIDTH))),
+      maxY: Math.max(...finalMainNodes.map(node => node.position.y + (node.height || DEFAULT_NODE_HEIGHT)))
+    } : { minX: 0, maxX: DEFAULT_NODE_WIDTH, maxY: 0 };
+    
+    const centerX = (mainTreeBounds.minX + mainTreeBounds.maxX) / 2 - ((endNode?.width || DEFAULT_NODE_WIDTH) / 2);
+    const endNodeY = mainTreeBounds.maxY + VERTICAL_SPACING;
+    
+    const positionedEndNode = endNode ? {
+      ...endNode,
+      position: { x: centerX, y: endNodeY }
+    } : null;
+
+    // Layout output tree if it exists
+    let finalOutputNodes: Node[] = [];
+    if (outputTreeNodes.length > 0 && positionedEndNode) {
+      const outputTreeEdges = edges.filter(edge => 
+        outputTreeNodeIds.includes(edge.source) && outputTreeNodeIds.includes(edge.target)
+      );
+      
+      const outputTreeWithEnd = [positionedEndNode, ...outputTreeNodes];
+      const outputNodesWithWidths = calculateSubtreeWidths(outputTreeWithEnd, [
+        ...edges.filter(edge => edge.source === END_NODE_ID),
+        ...outputTreeEdges
+      ]);
+      
+      const outputElkGraph = {
+        id: "output-root",
+        layoutOptions: {
+          "elk.algorithm": "mrtree",
+          "elk.direction": "DOWN",
+          "elk.spacing.nodeNode": NODE_SPACING.toString(),
+          "elk.spacing.edgeNode": "30", 
+          "elk.mrtree.compaction": "true",
+          "elk.mrtree.edgeRoutingMode": "AVOID_OVERLAP",
+          "elk.mrtree.searchOrder": "DFS",
+          "elk.mrtree.weighting": "MODEL_ORDER",
+          "elk.padding": "[top=50,left=50,bottom=50,right=50]"
+        },
+        children: outputNodesWithWidths.map((node: Node & { elkWidth: number }) => ({
+          id: node.id,
+          width: node.elkWidth,
+          height: node.height || DEFAULT_NODE_HEIGHT,
+        })),
+        edges: [
+          ...edges.filter(edge => edge.source === END_NODE_ID),
+          ...outputTreeEdges
+        ].map((edge) => ({
+          id: edge.id,
+          sources: [edge.source],
+          targets: [edge.target],
+        })),
+      };
+
+      const outputLayout = await elk.layout(outputElkGraph);
+      
+      // Position output tree relative to where we want the end node
+      const elkEndPosition = outputLayout.children?.find(n => n.id === END_NODE_ID);
+      const offsetX = positionedEndNode.position.x - (elkEndPosition?.x || 0);
+      const offsetY = positionedEndNode.position.y - (elkEndPosition?.y || 0);
+      
+      const outputLaidOutNodes = outputTreeWithEnd.map((node) => {
+        const layoutNode = outputLayout.children?.find((n) => n.id === node.id);
+        return {
+          ...node,
+          position: { 
+            x: (layoutNode?.x || 0) + offsetX, 
+            y: (layoutNode?.y || 0) + offsetY 
+          },
+          width: DEFAULT_NODE_WIDTH,
+        };
+      });
+
+      // Apply post-processing to output tree
+      const alignedOutputNodes = alignSiblingsAtTop(outputLaidOutNodes, [
+        ...edges.filter(edge => edge.source === END_NODE_ID),
+        ...outputTreeEdges
+      ]);
+      const centeredOutputNodes = centerParentsOverChildren(alignedOutputNodes, [
+        ...edges.filter(edge => edge.source === END_NODE_ID),
+        ...outputTreeEdges
+      ]);
+      
+      // Apply enhanced centering to output tree as well
+      const skewCorrectedOutputNodes = centerInputNodeForSkewedGraph(centeredOutputNodes, [
+        ...edges.filter(edge => edge.source === END_NODE_ID),
+        ...outputTreeEdges
+      ]);
+      
+      finalOutputNodes = constrainChildrenToParent(skewCorrectedOutputNodes, [
+        ...edges.filter(edge => edge.source === END_NODE_ID),
+        ...outputTreeEdges
+      ]);
+    }
+
+    if (finalOutputNodes.length > 0) {
+      return [...finalMainNodes, ...finalOutputNodes];
+    } else if (positionedEndNode) {
+      return [...finalMainNodes, positionedEndNode];
+    } else {
+      return finalMainNodes;
+    }
+  } catch (error) {
+    console.error('Layout calculation failed:', error);
+    return nodes; // Return original nodes as fallback
   }
 }
 
@@ -394,14 +496,14 @@ function centerParentsOverChildren(nodes: Node[], edges: Edge[]): Node[] {
     
     // Calculate the center point of all children
     const childrenLeftmost = Math.min(...childNodes.map(child => child.position.x));
-    const childrenRightmost = Math.max(...childNodes.map(child => child.position.x + (child.width || 500)));
+    const childrenRightmost = Math.max(...childNodes.map(child => child.position.x + (child.width || DEFAULT_NODE_WIDTH)));
     const childrenCenter = (childrenLeftmost + childrenRightmost) / 2;
     
     // Find the parent node and center it over children (but don't move children)
     const parentIndex = adjustedNodes.findIndex(node => node.id === parentId);
     if (parentIndex !== -1) {
       const parent = adjustedNodes[parentIndex];
-      const parentWidth = parent.width || 500;
+      const parentWidth = parent.width || DEFAULT_NODE_WIDTH;
       const newParentX = childrenCenter - (parentWidth / 2);
       
       // Only move the parent, not its children - this preserves ELK's spacing
@@ -418,64 +520,9 @@ function centerParentsOverChildren(nodes: Node[], edges: Edge[]): Node[] {
   return adjustedNodes;
 }
 
-// Helper function to fix actual node overlaps with minimal adjustments
-// Currently disabled to test ELK's built-in AVOID_OVERLAP feature
-/* function fixActualOverlaps(nodes: Node[]): Node[] {
-  const adjustedNodes = [...nodes];
-  const NODE_GAP = 20; // Minimal gap between nodes
-  
-  // Simple overlap detection - check all pairs of nodes
-  for (let i = 0; i < adjustedNodes.length; i++) {
-    for (let j = i + 1; j < adjustedNodes.length; j++) {
-      const nodeA = adjustedNodes[i];
-      const nodeB = adjustedNodes[j];
-      
-      // Check if nodes overlap horizontally and are at similar Y levels
-      const aLeft = nodeA.position.x;
-      const aRight = nodeA.position.x + (nodeA.width || 500);
-      const bLeft = nodeB.position.x;
-      const bRight = nodeB.position.x + (nodeB.width || 500);
-      
-      const aTop = nodeA.position.y;
-      const aBottom = nodeA.position.y + (nodeA.height || 300);
-      const bTop = nodeB.position.y;
-      const bBottom = nodeB.position.y + (nodeB.height || 300);
-      
-      // Check for overlap (both horizontal and vertical)
-      const horizontalOverlap = aLeft < bRight + NODE_GAP && bLeft < aRight + NODE_GAP;
-      const verticalOverlap = aTop < bBottom && bTop < aBottom;
-      
-      if (horizontalOverlap && verticalOverlap) {
-        // Push the rightmost node further right
-        if (nodeB.position.x > nodeA.position.x) {
-          const shiftAmount = aRight + NODE_GAP - bLeft;
-          adjustedNodes[j] = {
-            ...nodeB,
-            position: {
-              ...nodeB.position,
-              x: nodeB.position.x + shiftAmount
-            }
-          };
-        } else {
-          const shiftAmount = bRight + NODE_GAP - aLeft;
-          adjustedNodes[i] = {
-            ...nodeA,
-            position: {
-              ...nodeA.position,
-              x: nodeA.position.x + shiftAmount
-            }
-          };
-        }
-      }
-    }
-  }
-  
-  return adjustedNodes;
-} */
-
 // Helper function to constrain child nodes to be within reasonable vertical distance from parent
 function constrainChildrenToParent(nodes: Node[], edges: Edge[]): Node[] {
-  const MAX_VERTICAL_GAP = 50; // Maximum allowed vertical gap between parent and child
+  const MAX_VERTICAL_GAP = NODE_SPACING; // Maximum allowed vertical gap between parent and child
   const constrainedNodes = [...nodes];
   
   // For each edge, check if child is too far from parent and adjust if needed
@@ -485,7 +532,7 @@ function constrainChildrenToParent(nodes: Node[], edges: Edge[]): Node[] {
     
     if (parentNode && childIndex !== -1) {
       const childNode = constrainedNodes[childIndex];
-      const parentBottom = parentNode.position.y + (parentNode.height || 300);
+      const parentBottom = parentNode.position.y + (parentNode.height || DEFAULT_NODE_HEIGHT);
       const currentGap = childNode.position.y - parentBottom;
       
       // If child is too far from parent, move it closer
@@ -598,8 +645,8 @@ function Flow() {
     const parentLabel = node.data.label as string;
     const newNodeLabel = `${parentLabel} -> Node ${nodeCounter}`;
     
-    // Generate random height between 200-500px
-    const randomHeight = Math.floor(Math.random() * (500 - 200 + 1)) + 200;
+    // Generate random height between MIN_RANDOM_HEIGHT-MAX_RANDOM_HEIGHT px
+    const randomHeight = Math.floor(Math.random() * (MAX_RANDOM_HEIGHT - MIN_RANDOM_HEIGHT + 1)) + MIN_RANDOM_HEIGHT;
     
     // Create a new node
     const newNodeId = `node-${nodeCounter}`;
@@ -608,9 +655,9 @@ function Flow() {
       type: "customNode",
       data: { label: newNodeLabel, originalHeight: randomHeight },
       position: { x: 0, y: 0 }, // Will be positioned by ELK
-      width: 500,
+      width: DEFAULT_NODE_WIDTH,
       height: randomHeight,
-      style: { width: 500, height: randomHeight }
+      style: { width: DEFAULT_NODE_WIDTH, height: randomHeight }
     };
 
     // Update edges based on which node was clicked
@@ -668,14 +715,19 @@ function Flow() {
     // Add the new node
     setNodes((prevNodes) => [...prevNodes, newNode]);
     setNodeCounter((prev) => prev + 1);
-  }, [nodeCounter]);
+  }, [nodeCounter, edges]);
+
+  // Use useMemo for nodeHeights to optimize performance
+  const nodeHeights = useMemo(() => 
+    nodes.map(n => n.height), [nodes]
+  );
 
   // Apply layout whenever nodes or edges change (including height changes)
   useEffect(() => {
     if (nodes.length > 0) {
       applyLayout();
     }
-  }, [nodes.length, edges.length, nodes.map(n => n.height).join(',')]);
+  }, [nodes.length, edges.length, nodeHeights, applyLayout]);
 
   const resetGraph = useCallback(() => {
     setNodes(initialNodes);
@@ -686,10 +738,10 @@ function Flow() {
   return (
     <>
       <div style={{ position: "absolute", zIndex: 10, top: 10, left: 10, display: "flex", gap: "10px" }}>
-        <button onClick={applyLayout}>
+        <button onClick={applyLayout} aria-label="Re-layout graph">
           Re-layout
         </button>
-        <button onClick={resetGraph}>
+        <button onClick={resetGraph} aria-label="Reset graph to initial state">
           Reset
         </button>
       </div>

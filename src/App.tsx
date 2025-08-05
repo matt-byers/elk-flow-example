@@ -28,14 +28,18 @@ const NODE_SPACING = 50;
 const MIN_RANDOM_HEIGHT = 200;
 const MAX_RANDOM_HEIGHT = 500;
 
-// NEW: Constants for consistent edge styling
+// Constants for consistent edge styling
 const EDGE_THICKNESS = 2;
 const EDGE_COLOR = '#999';
 const EDGE_SPACING = 20;
 const EDGE_NODE_SPACING = 30;
 const LAYER_EDGE_SPACING = 40;
 
-// Custom node component with collapse/expand buttons
+// FIX BEX-1665: Handle positioning constants to eliminate gaps between edges and nodes
+const HANDLE_SIZE = 12; // Size of the connection handle
+const HANDLE_BORDER_WIDTH = 2;
+
+// Custom node component with collapse/expand buttons and precise edge connection
 function CustomNode({ id, data }: NodeProps) {
   const { setNodes } = useReactFlow();
   
@@ -75,6 +79,32 @@ function CustomNode({ id, data }: NodeProps) {
   
   const isEndNode = id === END_NODE_ID;
   
+  // FIX BEX-1665: Improved handle styles to eliminate gaps between edges and nodes
+  const handleStyle = {
+    background: '#fff',
+    border: `${HANDLE_BORDER_WIDTH}px solid ${EDGE_COLOR}`,
+    width: `${HANDLE_SIZE}px`,
+    height: `${HANDLE_SIZE}px`,
+    borderRadius: '50%',
+    // Ensure handles are positioned exactly at the node boundary
+    position: 'absolute' as const,
+  };
+
+  // FIX BEX-1665: Position handles precisely at the node edges to eliminate gaps
+  const topHandleStyle = {
+    ...handleStyle,
+    top: `-${HANDLE_SIZE / 2}px`, // Position handle centered on the top edge
+    left: '50%',
+    transform: 'translateX(-50%)', // Center horizontally
+  };
+
+  const bottomHandleStyle = {
+    ...handleStyle,
+    bottom: `-${HANDLE_SIZE / 2}px`, // Position handle centered on the bottom edge
+    left: '50%',
+    transform: 'translateX(-50%)', // Center horizontally
+  };
+  
   return (
     <div style={{
       width: `${DEFAULT_NODE_WIDTH}px`,
@@ -82,9 +112,17 @@ function CustomNode({ id, data }: NodeProps) {
       backgroundColor: isEndNode ? '#ffeb3b' : '#fff',
       border: isEndNode ? '2px solid #f57f17' : '1px solid #ddd',
       borderRadius: '5px',
-      boxSizing: 'border-box'
+      boxSizing: 'border-box',
+      position: 'relative' // Ensure proper positioning context for handles
     }}>
-      <Handle type="target" position={Position.Top} />
+      {/* FIX BEX-1665: Top handle with precise positioning to eliminate gaps */}
+      <Handle 
+        type="target" 
+        position={Position.Top} 
+        style={topHandleStyle}
+        id="top"
+      />
+      
       <div style={{ 
         display: 'flex', 
         flexDirection: 'column', 
@@ -141,7 +179,14 @@ function CustomNode({ id, data }: NodeProps) {
           {data.label}
         </div>
       </div>
-      <Handle type="source" position={Position.Bottom} />
+      
+      {/* FIX BEX-1665: Bottom handle with precise positioning to eliminate gaps */}
+      <Handle 
+        type="source" 
+        position={Position.Bottom} 
+        style={bottomHandleStyle}
+        id="bottom"
+      />
     </div>
   );
 }
@@ -282,9 +327,9 @@ function centerInputNodeForSkewedGraph(nodes: Node[], edges: Edge[]): Node[] {
 }
 
 /**
- * NEW: Apply consistent edge styling to ensure uniform appearance
+ * FIX BEX-1665: Apply consistent edge styling with improved connection points to eliminate gaps
  * @param edges - Array of edges to style
- * @returns Styled edge array with consistent properties
+ * @returns Styled edge array with consistent properties and precise node connections
  */
 function applyConsistentEdgeStyles(edges: Edge[]): Edge[] {
   return edges.map(edge => ({
@@ -301,6 +346,9 @@ function applyConsistentEdgeStyles(edges: Edge[]): Edge[] {
       height: 20,
       color: EDGE_COLOR,
     },
+    // FIX BEX-1665: Ensure edges connect to specific handles to eliminate gaps
+    sourceHandle: 'bottom',
+    targetHandle: 'top',
   }));
 }
 
@@ -341,10 +389,13 @@ async function layoutWithElk(nodes: Node[], edges: Edge[]): Promise<Node[]> {
         "elk.mrtree.searchOrder": "DFS", // Depth-first search for better centering
         "elk.mrtree.weighting": "MODEL_ORDER", // Respect model order for positioning
         "elk.padding": "[top=50,left=50,bottom=50,right=50]",
-        // NEW: Enhanced edge consistency settings
+        // Enhanced edge consistency settings
         "elk.spacing.edgeEdge": EDGE_SPACING.toString(), // Consistent spacing between edges
         "elk.layered.spacing.edgeNodeBetweenLayers": LAYER_EDGE_SPACING.toString(), // Consistent vertical edge spacing
         "elk.layered.spacing.edgeEdgeBetweenLayers": EDGE_SPACING.toString(), // Consistent edge-to-edge spacing
+        // FIX BEX-1665: Additional settings to ensure proper edge-to-node connections
+        "elk.edgeRouting": "ORTHOGONAL", // Use orthogonal routing for cleaner connections
+        "elk.layered.considerModelOrder.strategy": "PREFER_NODES", // Prioritize node positioning over edge routing
       },
       children: mainNodesWithSubtreeWidths.map((node: Node & { elkWidth: number }) => ({
         id: node.id,
@@ -419,10 +470,13 @@ async function layoutWithElk(nodes: Node[], edges: Edge[]): Promise<Node[]> {
           "elk.mrtree.searchOrder": "DFS",
           "elk.mrtree.weighting": "MODEL_ORDER",
           "elk.padding": "[top=50,left=50,bottom=50,right=50]",
-          // NEW: Apply consistent edge settings to output tree as well
+          // Apply consistent edge settings to output tree as well
           "elk.spacing.edgeEdge": EDGE_SPACING.toString(),
           "elk.layered.spacing.edgeNodeBetweenLayers": LAYER_EDGE_SPACING.toString(),
           "elk.layered.spacing.edgeEdgeBetweenLayers": EDGE_SPACING.toString(),
+          // FIX BEX-1665: Same edge routing improvements for output tree
+          "elk.edgeRouting": "ORTHOGONAL",
+          "elk.layered.considerModelOrder.strategy": "PREFER_NODES",
         },
         children: outputNodesWithWidths.map((node: Node & { elkWidth: number }) => ({
           id: node.id,

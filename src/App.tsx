@@ -28,6 +28,13 @@ const NODE_SPACING = 50;
 const MIN_RANDOM_HEIGHT = 200;
 const MAX_RANDOM_HEIGHT = 500;
 
+// NEW: Constants for consistent edge styling
+const EDGE_THICKNESS = 2;
+const EDGE_COLOR = '#999';
+const EDGE_SPACING = 20;
+const EDGE_NODE_SPACING = 30;
+const LAYER_EDGE_SPACING = 40;
+
 // Custom node component with collapse/expand buttons
 function CustomNode({ id, data }: NodeProps) {
   const { setNodes } = useReactFlow();
@@ -275,10 +282,36 @@ function centerInputNodeForSkewedGraph(nodes: Node[], edges: Edge[]): Node[] {
 }
 
 /**
- * Enhanced layout function with improved centering for skewed graphs
+ * NEW: Apply consistent edge styling to ensure uniform appearance
+ * @param edges - Array of edges to style
+ * @returns Styled edge array with consistent properties
+ */
+function applyConsistentEdgeStyles(edges: Edge[]): Edge[] {
+  return edges.map(edge => ({
+    ...edge,
+    style: {
+      strokeWidth: EDGE_THICKNESS,
+      stroke: EDGE_COLOR,
+    },
+    type: 'smoothstep', // Use smoothstep for consistent curved edges
+    animated: false,
+    markerEnd: {
+      type: 'arrowclosed',
+      width: 20,
+      height: 20,
+      color: EDGE_COLOR,
+    },
+  }));
+}
+
+/**
+ * Enhanced layout function with improved centering for skewed graphs and consistent edge styling
  */
 async function layoutWithElk(nodes: Node[], edges: Edge[]): Promise<Node[]> {
   try {
+    // Apply consistent edge styles first
+    const styledEdges = applyConsistentEdgeStyles(edges);
+    
     // Separate main tree nodes from output tree nodes
     const endNode = nodes.find(node => node.id === END_NODE_ID);
     const outputTreeNodeIds = getOutputTreeDescendants(edges);
@@ -302,12 +335,16 @@ async function layoutWithElk(nodes: Node[], edges: Edge[]): Promise<Node[]> {
         "elk.algorithm": "mrtree",
         "elk.direction": "DOWN",
         "elk.spacing.nodeNode": NODE_SPACING.toString(),
-        "elk.spacing.edgeNode": "30", 
+        "elk.spacing.edgeNode": EDGE_NODE_SPACING.toString(), 
         "elk.mrtree.compaction": "true",
         "elk.mrtree.edgeRoutingMode": "AVOID_OVERLAP",
         "elk.mrtree.searchOrder": "DFS", // Depth-first search for better centering
         "elk.mrtree.weighting": "MODEL_ORDER", // Respect model order for positioning
-        "elk.padding": "[top=50,left=50,bottom=50,right=50]"
+        "elk.padding": "[top=50,left=50,bottom=50,right=50]",
+        // NEW: Enhanced edge consistency settings
+        "elk.spacing.edgeEdge": EDGE_SPACING.toString(), // Consistent spacing between edges
+        "elk.layered.spacing.edgeNodeBetweenLayers": LAYER_EDGE_SPACING.toString(), // Consistent vertical edge spacing
+        "elk.layered.spacing.edgeEdgeBetweenLayers": EDGE_SPACING.toString(), // Consistent edge-to-edge spacing
       },
       children: mainNodesWithSubtreeWidths.map((node: Node & { elkWidth: number }) => ({
         id: node.id,
@@ -376,12 +413,16 @@ async function layoutWithElk(nodes: Node[], edges: Edge[]): Promise<Node[]> {
           "elk.algorithm": "mrtree",
           "elk.direction": "DOWN",
           "elk.spacing.nodeNode": NODE_SPACING.toString(),
-          "elk.spacing.edgeNode": "30", 
+          "elk.spacing.edgeNode": EDGE_NODE_SPACING.toString(), 
           "elk.mrtree.compaction": "true",
           "elk.mrtree.edgeRoutingMode": "AVOID_OVERLAP",
           "elk.mrtree.searchOrder": "DFS",
           "elk.mrtree.weighting": "MODEL_ORDER",
-          "elk.padding": "[top=50,left=50,bottom=50,right=50]"
+          "elk.padding": "[top=50,left=50,bottom=50,right=50]",
+          // NEW: Apply consistent edge settings to output tree as well
+          "elk.spacing.edgeEdge": EDGE_SPACING.toString(),
+          "elk.layered.spacing.edgeNodeBetweenLayers": LAYER_EDGE_SPACING.toString(),
+          "elk.layered.spacing.edgeEdgeBetweenLayers": EDGE_SPACING.toString(),
         },
         children: outputNodesWithWidths.map((node: Node & { elkWidth: number }) => ({
           id: node.id,
@@ -747,7 +788,7 @@ function Flow() {
       </div>
       <ReactFlow
         nodes={nodes}
-        edges={edges}
+        edges={applyConsistentEdgeStyles(edges)}
         nodeTypes={nodeTypes}
         onNodesChange={(changes) => setNodes((nds) => applyNodeChanges(changes, nds))}
         onEdgesChange={(changes) => setEdges((eds) => applyEdgeChanges(changes, eds))}
